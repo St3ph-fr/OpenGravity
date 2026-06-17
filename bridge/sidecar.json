@@ -1,0 +1,7 @@
+{
+  "display_name": "OpenGravity WhatsApp Bridge",
+  "description": "Control Antigravity by sending messages in your own WhatsApp chat or a dedicated number.",
+  "command": "node",
+  "args": ["bridge.js"],
+  "restart_policy": "always"
+}

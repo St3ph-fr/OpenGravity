@@ -1,0 +1,15 @@
+{
+  "name": "opengravity",
+  "version": "0.1.0",
+  "description": "Custom plugin for OpenGravity workspace and conversation management.",
+  "author": {
+    "name": "OpenGravity Community"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "opengravity",
+    "conversation-management",
+    "sidecars",
+    "antigravity"
+  ]
+}
