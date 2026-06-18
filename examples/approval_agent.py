@@ -46,14 +46,14 @@ async def main():
         policies.append(policy.ask_user("run_command", handler=whatsapp_approval_handler))
 
     config = LocalAgentConfig(
-        system_instructions="You are an autonomous OpenGravity agent. Speak in French.",
+        system_instructions="You are an autonomous OpenGravity agent. Speak in English.",
         capabilities=CapabilitiesConfig(),
         policies=policies,
     )
 
     print("[OpenGravity Agent] Starting agent session...")
     async with Agent(config=config) as agent:
-        response = await agent.chat("Lancer un build npm ou lister le répertoire de travail.")
+        response = await agent.chat("Run an npm build or list the working directory.")
         async for token in response:
             print(token, end="", flush=True)
 

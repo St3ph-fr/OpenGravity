@@ -61,7 +61,7 @@ function getRequestToResolve(messageText) {
         if (pendingApprovals.has(reqId)) {
             return { reqId, decision };
         } else {
-            return { error: `La demande d'autorisation ${reqId} est introuvable ou a expiré.` };
+            return { error: `Authorization request ${reqId} not found or expired.` };
         }
     }
     
@@ -71,7 +71,7 @@ function getRequestToResolve(messageText) {
         return { reqId: latestReqId, decision };
     }
     
-    return { error: "Aucune demande d'autorisation en attente." };
+    return { error: "No pending authorization requests." };
 }
 
 function setHookEnabled(enabled) {
@@ -81,23 +81,45 @@ function setHookEnabled(enabled) {
         if (fs.existsSync(hooksPath)) {
             hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
         }
-        if (!hooks["whatsapp-approval"]) {
-            hooks["whatsapp-approval"] = {
-                "PreToolUse": [
-                    {
-                        "matcher": "run_command",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": `python3 "${path.join(__dirname, 'approval_hook.py')}"`,
-                                "timeout": 130
-                            }
-                        ]
-                    }
-                ]
-            };
-        }
-        hooks["whatsapp-approval"].enabled = enabled;
+        hooks["whatsapp-approval"] = {
+            "enabled": enabled,
+            "PreToolUse": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": `python3 "${path.join(__dirname, 'approval_hook.py')}" pre`,
+                            "timeout": 130
+                        }
+                    ]
+                }
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": `python3 "${path.join(__dirname, 'approval_hook.py')}" post`,
+                            "timeout": 30
+                        }
+                    ]
+                }
+            ],
+            "Stop": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": `python3 "${path.join(__dirname, 'approval_hook.py')}" stop`,
+                            "timeout": 30
+                        }
+                    ]
+                }
+            ]
+        };
         fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2), 'utf8');
         console.log(`[WhatsApp Bridge] Hook set to enabled=${enabled}`);
     } catch (e) {
@@ -113,7 +135,7 @@ function getState() {
             return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
         }
     } catch (e) {
-        console.error("[WhatsApp Bridge] Erreur lors de la lecture de state.json:", e);
+        console.error("[WhatsApp Bridge] Error reading state.json:", e);
     }
     return {};
 }
@@ -122,7 +144,7 @@ function saveState(state) {
     try {
         fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
     } catch (e) {
-        console.error("[WhatsApp Bridge] Erreur lors de l'écriture de state.json:", e);
+        console.error("[WhatsApp Bridge] Error writing state.json:", e);
     }
 }
 
@@ -134,7 +156,7 @@ function getProjectId() {
             return config?.sidecars?.['whatsapp-bridge']?.projectId || 'outside-of-project';
         }
     } catch (e) {
-        console.error("[WhatsApp Bridge] Erreur lors de la lecture de config.json:", e);
+        console.error("[WhatsApp Bridge] Error reading config.json:", e);
     }
     return 'outside-of-project';
 }
@@ -154,7 +176,7 @@ function getLastStepIndex(conversationId) {
         }
         return maxIndex;
     } catch (e) {
-        console.error(`[WhatsApp Bridge] Erreur lors de la lecture du dernier step index de ${conversationId}:`, e);
+        console.error(`[WhatsApp Bridge] Error reading last step index for ${conversationId}:`, e);
         return -1;
     }
 }
@@ -166,7 +188,7 @@ async function pollResponse(conversationId, sock, sender, startStepIndex = -1) {
     let attempts = 0;
     const maxAttempts = 300; // 10 minutes max (2s interval)
 
-    console.log(`[WhatsApp Bridge] Commencer le polling du log pour la conversation : ${conversationId}`);
+    console.log(`[WhatsApp Bridge] Starting log polling for conversation: ${conversationId}`);
 
     return new Promise((resolve) => {
         let lastSize = 0;
@@ -175,7 +197,7 @@ async function pollResponse(conversationId, sock, sender, startStepIndex = -1) {
             attempts++;
             if (attempts > maxAttempts) {
                 clearInterval(interval);
-                const reply = await sock.sendMessage(sender, { text: "⚠️ Temps d'attente dépassé (10 minutes). L'agent est toujours en cours d'exécution." });
+                const reply = await sock.sendMessage(sender, { text: "⚠️ Timeout reached (10 minutes). Agent is still running." });
                 botMessageIds.add(reply.key.id);
                 resolve();
                 return;
@@ -209,14 +231,14 @@ async function pollResponse(conversationId, sock, sender, startStepIndex = -1) {
                                     const text = step.content;
 
                                     if (text && text.trim()) {
-                                        console.log(`[WhatsApp Bridge] Envoi de la réponse de l'agent : ${text.substring(0, 50)}...`);
+                                        console.log(`[WhatsApp Bridge] Sending agent response: ${text.substring(0, 50)}...`);
                                         const finalReply = await sock.sendMessage(sender, { text: text });
                                         botMessageIds.add(finalReply.key.id);
                                     }
 
                                     // If there are no tool calls, the agent's turn is finished
                                     if (!hasToolCalls) {
-                                        console.log(`[WhatsApp Bridge] L'agent a terminé son exécution.`);
+                                        console.log(`[WhatsApp Bridge] Agent has finished executing.`);
                                         clearInterval(interval);
                                         resolve();
                                         return;
@@ -224,12 +246,12 @@ async function pollResponse(conversationId, sock, sender, startStepIndex = -1) {
                                 }
                             }
                         } catch (e) {
-                            // Ignorer les lignes incomplètes
+                            // Ignore incomplete lines
                         }
                     }
                 }
             } catch (err) {
-                console.error("[WhatsApp Bridge] Erreur lors du polling du transcript :", err);
+                console.error("[WhatsApp Bridge] Error polling transcript:", err);
             }
         }, 2000);
     });
@@ -246,15 +268,43 @@ function startHttpServer() {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 status: isWhatsAppConnected ? 'connected' : 'disconnected',
-                phone: process.env.WHATSAPP_PHONE_NUMBER || 'Non défini'
+                phone: process.env.WHATSAPP_PHONE_NUMBER || 'Not defined'
             }));
+            return;
+        }
+
+        if (req.method === 'POST' && req.url === '/notify') {
+            if (!isWhatsAppConnected || !activeSock) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ status: 'error', error: "Not connected" }));
+                return;
+            }
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', async () => {
+                try {
+                    const payload = JSON.parse(body);
+                    const message = payload.message;
+                    if (message) {
+                        const myJid = activeSock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        const notifyMsg = await activeSock.sendMessage(myJid, { text: message });
+                        botMessageIds.add(notifyMsg.key.id);
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ status: 'success' }));
+                } catch (err) {
+                    console.error("[HTTP Server] Error processing notify request:", err);
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: err.message }));
+                }
+            });
             return;
         }
 
         if (req.method === 'POST' && req.url === '/approve-request') {
             if (!isWhatsAppConnected || !activeSock) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ approved: false, error: "Le pont WhatsApp n'est pas connecté. Veuillez lier votre compte WhatsApp." }));
+                res.end(JSON.stringify({ approved: false, error: "The WhatsApp bridge is not connected. Please link your WhatsApp account." }));
                 return;
             }
             
@@ -270,7 +320,7 @@ function startHttpServer() {
                     const myJid = activeSock.user.id.split(':')[0] + '@s.whatsapp.net';
                     const requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
                     
-                    const messageText = `⚠️ *[Demande d'autorisation OpenGravity]*\n\nOutil : \`${payload.tool_name}\`\nCommande : \`${command}\`\n\nRépondez par :\n* \`/allow ${requestId}\` (ou 👍) pour autoriser\n* \`/disallow ${requestId}\` (ou 👎) pour refuser`;
+                    const messageText = `⚠️ *[OpenGravity Authorization Request]*\n\nTool: \`${payload.tool_name}\`\nCommand: \`${command}\`\n\nReply with:\n* \`/allow ${requestId}\` (or 👍) to authorize\n* \`/disallow ${requestId}\` (or 👎) to deny`;
                     
                     const approvalMsg = await activeSock.sendMessage(myJid, { text: messageText });
                     botMessageIds.add(approvalMsg.key.id);
@@ -323,16 +373,16 @@ async function startWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
-            console.log("\n=== VEUILLEZ SCANNER LE QR CODE (PNG GÉNÉRÉ DANS VOTRE LOG) ===");
+            console.log("\n=== PLEASE SCAN THE QR CODE (PNG GENERATED IN YOUR LOG) ===");
             qrcodeTerminal.generate(qr, { small: true });
 
             // Generate PNG image of the QR Code
             const qrPngPath = path.join(__dirname, 'qr.png');
             try {
                 await QRCode.toFile(qrPngPath, qr, { scale: 8 });
-                console.log(`[WhatsApp Bridge] QR Code PNG généré à : ${qrPngPath}`);
+                console.log(`[WhatsApp Bridge] QR Code PNG generated at: ${qrPngPath}`);
             } catch (err) {
-                console.error("[WhatsApp Bridge] Échec de la génération du PNG du QR Code :", err);
+                console.error("[WhatsApp Bridge] Failed to generate QR Code PNG:", err);
             }
 
             // Request pairing code on the active socket
@@ -340,17 +390,17 @@ async function startWhatsApp() {
                 sock.pairingCodeRequested = true;
                 const phoneNumber = process.env.WHATSAPP_PHONE_NUMBER;
                 if (!phoneNumber) {
-                    console.log(`[WhatsApp Bridge] WHATSAPP_PHONE_NUMBER non défini. Ignorer la demande de code d'association par numéro.`);
+                    console.log(`[WhatsApp Bridge] WHATSAPP_PHONE_NUMBER not defined. Skipping pairing code request.`);
                 } else {
-                    console.log(`[WhatsApp Bridge] QR émis. Demande de code d'association pour ${phoneNumber}...`);
+                    console.log(`[WhatsApp Bridge] QR generated. Requesting pairing code for ${phoneNumber}...`);
                     setTimeout(async () => {
                         try {
                             const code = await sock.requestPairingCode(phoneNumber);
                             console.log(`\n=========================================`);
-                            console.log(`VOTRE CODE D'ASSOCIATION WHATSAPP : ${code}`);
+                            console.log(`YOUR WHATSAPP PAIRING CODE: ${code}`);
                             console.log(`=========================================\n`);
                         } catch (err) {
-                            console.error("[WhatsApp Bridge] Échec de la demande de code d'association:", err);
+                            console.error("[WhatsApp Bridge] Pairing code request failed:", err);
                             sock.pairingCodeRequested = false;
                         }
                     }, 2000);
@@ -360,24 +410,24 @@ async function startWhatsApp() {
         if (connection === 'close') {
             isWhatsAppConnected = false;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            console.log(`[WhatsApp Bridge] Connexion fermée (Code: ${statusCode || 'inconnu'}).`);
+            console.log(`[WhatsApp Bridge] Connection closed (Code: ${statusCode || 'unknown'}).`);
             
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
             if (isLoggedOut) {
-                console.log("[WhatsApp Bridge] Déconnexion détectée. Suppression de la session...");
+                console.log("[WhatsApp Bridge] Logout detected. Deleting session...");
                 try {
                     fs.rmSync(path.join(__dirname, 'auth_session'), { recursive: true, force: true });
                 } catch (e) {
-                    console.error("[WhatsApp Bridge] Échec de la suppression de la session :", e);
+                    console.error("[WhatsApp Bridge] Failed to delete session:", e);
                 }
             }
             
-            console.log("[WhatsApp Bridge] Reconnexion dans 5 secondes...");
+            console.log("[WhatsApp Bridge] Reconnecting in 5 seconds...");
             setTimeout(startWhatsApp, 5000);
         } else if (connection === 'open') {
             isWhatsAppConnected = true;
-            console.log('Connexion WhatsApp établie !');
-            console.log(`Connecté sur le compte de : ${sock.user.name || sock.user.id}`);
+            console.log('WhatsApp connection established!');
+            console.log(`Connected to account: ${sock.user.name || sock.user.id}`);
         }
     });
 
@@ -430,7 +480,7 @@ async function startWhatsApp() {
                             pendingApprovals.delete(targetReqId);
                             
                             // Send confirmation to WhatsApp
-                            const confirmationText = approved ? "✅ Commande autorisée (par réaction) !" : "❌ Commande refusée (par réaction) !";
+                            const confirmationText = approved ? "✅ Command authorized (via reaction)!" : "❌ Command denied (via reaction)!";
                             const reply = await sock.sendMessage(sender, { text: confirmationText });
                             botMessageIds.add(reply.key.id);
                         }
@@ -481,7 +531,7 @@ async function startWhatsApp() {
                         pendingApprovals.delete(reqId);
                         
                         // Send confirmation to WhatsApp
-                        const confirmationText = approved ? "✅ Commande autorisée !" : "❌ Commande refusée !";
+                        const confirmationText = approved ? "✅ Command authorized!" : "❌ Command denied!";
                         const reply = await sock.sendMessage(sender, { text: confirmationText });
                         botMessageIds.add(reply.key.id);
                     }
@@ -489,9 +539,9 @@ async function startWhatsApp() {
                 continue; // VERY IMPORTANT: skip running agentapi for approval responses!
             }
 
-            console.log(`Nouvelle consigne détectée : "${messageText}"`);
+            console.log(`New instruction detected: "${messageText}"`);
 
-            const typingNotice = await sock.sendMessage(sender, { text: "⏳ Antigravity traite votre demande..." });
+            const typingNotice = await sock.sendMessage(sender, { text: "⏳ Antigravity is processing your request..." });
             botMessageIds.add(typingNotice.key.id);
 
             try {
@@ -503,8 +553,8 @@ async function startWhatsApp() {
                 if (messageText.startsWith('/new ')) {
                     const prompt = messageText.substring(5); // strip "/new "
                     const currentProjectId = getProjectId();
-                    console.log(`[WhatsApp Bridge] Démarrage forcé d'une nouvelle conversation pour le projet : ${currentProjectId}`);
-                    const systemNote = "\n\n(Note pour l'agent : Cette conversation démarre un nouveau contexte de discussion car l'utilisateur a demandé explicitement une nouvelle conversation. Parlez en français.)";
+                    console.log(`[WhatsApp Bridge] Forced start of a new conversation for project: ${currentProjectId}`);
+                    const systemNote = "\n\n(Note for the agent: This conversation starts a new context because the user explicitly requested a new conversation. Speak in English.)";
                     const fullPrompt = prompt + systemNote;
                     const escapedPrompt = fullPrompt.replace(/"/g, '\\"');
                     const agentapiPath = path.join(os.homedir(), '.gemini/antigravity/bin/agentapi');
@@ -520,7 +570,7 @@ async function startWhatsApp() {
                     startStepIndex = getLastStepIndex(conversationId);
                 } else {
                     const currentProjectId = getProjectId();
-                    console.log(`[WhatsApp Bridge] Projet en cours configuré : ${currentProjectId}`);
+                    console.log(`[WhatsApp Bridge] Currently configured project: ${currentProjectId}`);
 
                     // Check if we have a saved conversation ID that is less than 1 hour old and matches the current project
                     const state = getState();
@@ -536,7 +586,7 @@ async function startWhatsApp() {
                             if (ageMs < 3600 * 1000) { // < 1 hour
                                 useSaved = true;
                                 conversationId = savedId;
-                                console.log(`[WhatsApp Bridge] Réutilisation de la conversation récente : ${conversationId} pour le projet ${currentProjectId} (dernière activité il y a ${(ageMs/60000).toFixed(1)} minutes)`);
+                                console.log(`[WhatsApp Bridge] Reusing recent conversation: ${conversationId} for project ${currentProjectId} (last active ${(ageMs/60000).toFixed(1)} minutes ago)`);
                             }
                         }
                     }
@@ -548,8 +598,8 @@ async function startWhatsApp() {
                         isReply = true;
                         startStepIndex = getLastStepIndex(conversationId);
                     } else {
-                        console.log(`[WhatsApp Bridge] Démarrage d'une nouvelle conversation pour le projet : ${currentProjectId}`);
-                        const systemNote = "\n\n(Note pour l'agent : Cette conversation démarre un nouveau contexte de discussion car la précédente a expiré, a changé de projet ou est inexistante. Parlez en français.)";
+                        console.log(`[WhatsApp Bridge] Starting a new conversation for project: ${currentProjectId}`);
+                        const systemNote = "\n\n(Note for the agent: This conversation starts a new context because the previous one expired, changed project, or does not exist. Speak in English.)";
                         const fullPrompt = messageText + systemNote;
                         const escapedPrompt = fullPrompt.replace(/"/g, '\\"');
                         const agentapiPath = path.join(os.homedir(), '.gemini/antigravity/bin/agentapi');
@@ -561,13 +611,13 @@ async function startWhatsApp() {
                 setHookEnabled(true);
 
                 const output = await runCommand(cmd);
-                console.log(`Commande exécutée avec succès. Output: ${output}`);
+                console.log(`Command executed successfully. Output: ${output}`);
 
                 let result;
                 try {
                     result = JSON.parse(output);
                 } catch (e) {
-                    console.error("Impossible de parser l'output JSON :", e);
+                    console.error("Unable to parse JSON output:", e);
                 }
 
                 if (!isReply && result) {
@@ -586,19 +636,19 @@ async function startWhatsApp() {
 
                 if (conversationId) {
                     if (!isReply) {
-                        const infoMsg = await sock.sendMessage(sender, { text: `id_conv: ${conversationId} (Nouvelle discussion)` });
+                        const infoMsg = await sock.sendMessage(sender, { text: `conv_id: ${conversationId} (New discussion)` });
                         botMessageIds.add(infoMsg.key.id);
                     }
                     // Poll and stream response steps back to the user
                     await pollResponse(conversationId, sock, sender, startStepIndex);
                 } else {
-                    const finalReply = await sock.sendMessage(sender, { text: `Exécuté : ${output}` });
+                    const finalReply = await sock.sendMessage(sender, { text: `Executed: ${output}` });
                     botMessageIds.add(finalReply.key.id);
                 }
 
             } catch (err) {
-                console.error("Erreur lors de l'exécution d'agentapi :", err);
-                const errorReply = await sock.sendMessage(sender, { text: `❌ Erreur : ${err.message || err}` });
+                console.error("Error executing agentapi:", err);
+                const errorReply = await sock.sendMessage(sender, { text: `❌ Error: ${err.message || err}` });
                 botMessageIds.add(errorReply.key.id);
             } finally {
                 // Ensure hook is disabled after execution ends
