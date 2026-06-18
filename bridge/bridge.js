@@ -181,6 +181,39 @@ function getLastStepIndex(conversationId) {
     }
 }
 
+function hasActiveBackgroundTasks(logPath) {
+    if (!fs.existsSync(logPath)) return false;
+    try {
+        const data = fs.readFileSync(logPath, 'utf8');
+        const lines = data.split('\n').filter(line => line.trim() !== '');
+        
+        const runningTasks = new Set();
+        for (const line of lines) {
+            try {
+                const step = JSON.parse(line);
+                // Check if a task started running in the background
+                if (step.status === 'RUNNING' && step.content) {
+                    const match = step.content.match(/task id:\s*([^\s\n]+)/i);
+                    if (match) {
+                        runningTasks.add(match[1]);
+                    }
+                }
+                // Check if a task finished
+                if (step.type === 'SYSTEM_MESSAGE' && step.content) {
+                    const match = step.content.match(/sender=([^\s]+)/i);
+                    if (match && match[1].includes('task-')) {
+                        runningTasks.delete(match[1]);
+                    }
+                }
+            } catch (e) {}
+        }
+        return runningTasks.size > 0;
+    } catch (err) {
+        console.error("[WhatsApp Bridge] Error checking background tasks:", err);
+        return false;
+    }
+}
+
 // Function to poll the conversation log for planner responses
 async function pollResponse(conversationId, sock, sender, startStepIndex = -1) {
     const logPath = path.join(os.homedir(), '.gemini/antigravity/brain', conversationId, '.system_generated/logs/transcript.jsonl');
@@ -238,10 +271,15 @@ async function pollResponse(conversationId, sock, sender, startStepIndex = -1) {
 
                                     // If there are no tool calls, the agent's turn is finished
                                     if (!hasToolCalls) {
-                                        console.log(`[WhatsApp Bridge] Agent has finished executing.`);
-                                        clearInterval(interval);
-                                        resolve();
-                                        return;
+                                        const hasTasks = hasActiveBackgroundTasks(logPath);
+                                        if (!hasTasks) {
+                                            console.log(`[WhatsApp Bridge] Agent has finished executing (no active background tasks).`);
+                                            clearInterval(interval);
+                                            resolve();
+                                            return;
+                                        } else {
+                                            console.log(`[WhatsApp Bridge] Agent turn finished, but background tasks are still running. Continuing to poll...`);
+                                        }
                                     }
                                 }
                             }
