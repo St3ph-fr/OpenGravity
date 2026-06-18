@@ -214,6 +214,66 @@ function hasActiveBackgroundTasks(logPath) {
     }
 }
 
+function extractMediaAndFiles(text) {
+    const images = [];
+    const documents = [];
+    let cleanedText = text;
+
+    const cleanPath = (p) => {
+        let resolved = p.replace(/^file:\/\//, '');
+        if (resolved.startsWith('~/')) {
+            resolved = path.join(os.homedir(), resolved.substring(2));
+        }
+        return resolved;
+    };
+
+    // 1. Extract markdown images
+    const imgRegex = /!\[(.*?)\]\((.*?)\)/g;
+    let match;
+    while ((match = imgRegex.exec(text)) !== null) {
+        const caption = match[1];
+        const rawPath = match[2];
+        const pathStr = cleanPath(rawPath);
+        const ext = path.extname(pathStr).toLowerCase();
+        if (ext === '.png' || ext === '.jpg' || ext === '.jpeg') {
+            images.push({ path: pathStr, caption: caption });
+        }
+    }
+
+    // 2. Extract markdown document links (specifically PDFs)
+    const docRegex = /\[(.*?)\]\((.*?)\)/g;
+    while ((match = docRegex.exec(text)) !== null) {
+        const fileName = match[1];
+        const rawPath = match[2];
+        const pathStr = cleanPath(rawPath);
+        const ext = path.extname(pathStr).toLowerCase();
+        if (ext === '.pdf') {
+            documents.push({ path: pathStr, fileName: fileName });
+        }
+    }
+
+    // Clean text: replace raw markdown image/file links to local paths with cleaner labels
+    cleanedText = cleanedText.replace(/!\[(.*?)\]\((.*?)\)/g, (m, caption, rawPath) => {
+        const pathStr = cleanPath(rawPath);
+        const ext = path.extname(pathStr).toLowerCase();
+        if (ext === '.png' || ext === '.jpg' || ext === '.jpeg') {
+            return `📷 *[Image: ${caption}]*`;
+        }
+        return m;
+    });
+
+    cleanedText = cleanedText.replace(/\[(.*?)\]\((.*?)\)/g, (m, fileName, rawPath) => {
+        const pathStr = cleanPath(rawPath);
+        const ext = path.extname(pathStr).toLowerCase();
+        if (ext === '.pdf') {
+            return `📄 *[Document: ${fileName}]*`;
+        }
+        return m;
+    });
+
+    return { cleanedText, images, documents };
+}
+
 // Function to poll the conversation log for planner responses
 async function pollResponse(conversationId, sock, sender, startStepIndex = -1) {
     const logPath = path.join(os.homedir(), '.gemini/antigravity/brain', conversationId, '.system_generated/logs/transcript.jsonl');
@@ -265,8 +325,46 @@ async function pollResponse(conversationId, sock, sender, startStepIndex = -1) {
 
                                     if (text && text.trim()) {
                                         console.log(`[WhatsApp Bridge] Sending agent response: ${text.substring(0, 50)}...`);
-                                        const finalReply = await sock.sendMessage(sender, { text: text });
+                                        
+                                        // Extract media and documents
+                                        const { cleanedText, images, documents } = extractMediaAndFiles(text);
+                                        
+                                        // Send cleaned text response first
+                                        const finalReply = await sock.sendMessage(sender, { text: cleanedText });
                                         botMessageIds.add(finalReply.key.id);
+                                        
+                                        // Send PNG/JPG images
+                                        for (const img of images) {
+                                            if (fs.existsSync(img.path)) {
+                                                console.log(`[WhatsApp Bridge] Sending image: ${img.path}`);
+                                                try {
+                                                    const mediaReply = await sock.sendMessage(sender, {
+                                                        image: { url: img.path },
+                                                        caption: img.caption || "Image"
+                                                    });
+                                                    botMessageIds.add(mediaReply.key.id);
+                                                } catch (err) {
+                                                    console.error(`[WhatsApp Bridge] Error sending image ${img.path}:`, err);
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Send PDF documents
+                                        for (const doc of documents) {
+                                            if (fs.existsSync(doc.path)) {
+                                                console.log(`[WhatsApp Bridge] Sending PDF document: ${doc.path}`);
+                                                try {
+                                                    const mediaReply = await sock.sendMessage(sender, {
+                                                        document: { url: doc.path },
+                                                        mimetype: 'application/pdf',
+                                                        fileName: doc.fileName || 'Document.pdf'
+                                                    });
+                                                    botMessageIds.add(mediaReply.key.id);
+                                                } catch (err) {
+                                                    console.error(`[WhatsApp Bridge] Error sending document ${doc.path}:`, err);
+                                                }
+                                            }
+                                        }
                                     }
 
                                     // If there are no tool calls, the agent's turn is finished
