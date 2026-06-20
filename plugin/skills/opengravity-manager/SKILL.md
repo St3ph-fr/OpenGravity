@@ -36,7 +36,7 @@ OpenGravity conversation states are stored in two locations:
 
 ---
 
-## Modifying Bridge States
+## Modifying Bridge States & Switching Projects
 The WhatsApp bridge (`whatsapp-bridge` sidecar) stores its active conversation state in:
 `~/.gemini/config/sidecars/whatsapp-bridge/state.json`
 
@@ -47,4 +47,9 @@ Format:
   "lastProjectId": "<project_id>"
 }
 ```
-If you need to force-switch to a new conversation or a different project, you can update this file or modify the project ID in the global config.
+
+### Creating or Switching Projects
+If the user requests to create a new project or switch to a different project:
+1. **Create or modify the project configuration** under `~/.gemini/config/projects/<project_id>.json`.
+2. **Update the state file**: Write the new `lastProjectId` to `~/.gemini/config/sidecars/whatsapp-bridge/state.json`.
+3. **Reset the conversation**: You **MUST** clear the `lastConversationId` (set it to `""` or `null`, or remove it) in the `state.json` file. This forces the WhatsApp bridge to start a brand new conversation context for the new project next time a message is sent.

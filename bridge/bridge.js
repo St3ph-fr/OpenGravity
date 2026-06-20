@@ -161,6 +161,32 @@ function getProjectId() {
     return 'outside-of-project';
 }
 
+function listAvailableProjects() {
+    const projectsDir = path.join(os.homedir(), '.gemini/config/projects');
+    const projects = [];
+    if (fs.existsSync(projectsDir)) {
+        try {
+            const files = fs.readdirSync(projectsDir);
+            for (const file of files) {
+                if (file.endsWith('.json')) {
+                    try {
+                        const filePath = path.join(projectsDir, file);
+                        const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                        if (content.id && content.name) {
+                            projects.push({ id: content.id, name: content.name });
+                        }
+                    } catch (e) {
+                        // Skip bad JSON
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("[WhatsApp Bridge] Error reading projects directory:", e);
+        }
+    }
+    return projects;
+}
+
 function getLastStepIndex(conversationId) {
     const logPath = path.join(os.homedir(), '.gemini/antigravity/brain', conversationId, '.system_generated/logs/transcript.jsonl');
     if (!fs.existsSync(logPath)) return -1;
@@ -746,7 +772,49 @@ async function startWhatsApp() {
                 // Enable the validation hook dynamically before running agentapi
                 setHookEnabled(true);
 
-                const output = await runCommand(cmd);
+                let output;
+                let success = false;
+                try {
+                    output = await runCommand(cmd);
+                    success = true;
+                } catch (err) {
+                    console.warn(`[WhatsApp Bridge] First command attempt failed: ${err.message || err}`);
+                    if (isReply) {
+                        const currentProjectId = getProjectId();
+                        const promptText = messageText.startsWith('/reply ') ? messageText.split(' ').slice(2).join(' ') : messageText;
+                        const systemNote = "\n\n(Note for the agent: This conversation starts a new context because the previous one could not be loaded or did not exist. Speak in English.)";
+                        const fullPrompt = promptText + systemNote;
+                        const escapedPrompt = fullPrompt.replace(/"/g, '\\"');
+                        const agentapiPath = path.join(os.homedir(), '.gemini/antigravity/bin/agentapi');
+                        const fallbackCmd = `"${agentapiPath}" new-conversation "${escapedPrompt}"`;
+                        
+                        console.log(`[WhatsApp Bridge] Attempting fallback to new-conversation in project: ${currentProjectId}`);
+                        try {
+                            output = await runCommand(fallbackCmd);
+                            success = true;
+                            isReply = false; // Now treated as a new conversation
+                            startStepIndex = -1;
+                        } catch (fallbackErr) {
+                            console.error(`[WhatsApp Bridge] Fallback command also failed: ${fallbackErr.message || fallbackErr}`);
+                        }
+                    }
+                }
+
+                if (!success) {
+                    const projects = listAvailableProjects();
+                    let projectsList = "";
+                    if (projects.length > 0) {
+                        projectsList = projects.map(p => `- *${p.name}* (ID: \`${p.id}\`)`).join('\n');
+                    } else {
+                        projectsList = "No projects found.";
+                    }
+                    
+                    const errMessage = `❌ *Error*: I was unable to send your message or start a new conversation in the current project.\n\nHere are the projects available on this system:\n${projectsList}\n\nPlease specify which project you would like to use or switch projects.`;
+                    const errorReply = await sock.sendMessage(sender, { text: errMessage });
+                    botMessageIds.add(errorReply.key.id);
+                    return;
+                }
+
                 console.log(`Command executed successfully. Output: ${output}`);
 
                 let result;
